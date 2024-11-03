@@ -2,124 +2,228 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include <WiFiManager.h>
+#include <images.h>
 
-#define SCREEN_WIDTH 128 // OLED display width, in pixels
-#define SCREEN_HEIGHT 64 // OLED display height, in pixels
-#define OLED_SDA 17      // SDA pin
-#define OLED_SCL 18      // SCL pin
-#define OLED_RST 21      // Reset pin (or -1 if sharing Arduino reset pin)
-#define SCREEN_ADDRESS 0x3C ///< See datasheet for Address; 0x3D for 128x64, 0x3C for 128x32
-#define I2C_FREQUENCY 500000 // I2C frequency
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_SDA 17
+#define OLED_SCL 18
+#define OLED_RST 21
+#define SCREEN_ADDRESS 0x3C
+#define I2C_FREQUENCY 500000
+#define BUTTON_PIN 0 // GPIO do botão PROG
 
-// Pinos GPIO para as saídas digitais (modificar conforme necessário)
-int digitalPins[7] = {1, 2, 3, 4, 5, 6, 7}; 
+int digitalPins[7] = {1, 2, 3, 4, 5, 6, 7};
 
-// Inicializar o display
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
 
-// Variável para armazenar o status das saídas
-bool outputStatus[7] = {false, false, false, false, false, false, false}; 
+bool outputStatus[7] = {false, false, false, false, false, false, false};
 
-// Função para desenhar a tabela com o status das saídas
-void drawTable() {
+int currentScreen = 0;
+
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 200;
+unsigned long lastToggleTime = 0;
+unsigned long toggleInterval = 500;
+int relayIndex = 0;
+
+void drawRelayStatusScreen()
+{
   display.clearDisplay();
-  int cellWidth = SCREEN_WIDTH / 7; // Largura de cada célula
-  int cellHeight = SCREEN_HEIGHT / 3; // Altura de cada célula (metade da altura do display)
 
-  display.setCursor(0,0);
+  display.setCursor(26, 3);
   display.print("Relay Status:");
+  display.drawLine(2, 13, 125, 13, 1);
 
-  // Desenhar linhas da tabela
-  for (int i = 0; i <= 7; i++) {
-    display.drawLine(i * cellWidth, SCREEN_HEIGHT / 3, i * cellWidth, SCREEN_HEIGHT, SSD1306_WHITE);
-  }
+  display.drawBitmap(1, 27, Table, 127, 36, 1);
+  display.drawBitmap(4, 33, OffArrayLabel, 120, 5, 1);
 
-  // Desenhar linha horizontal para a divisão das linhas
-  display.drawLine(0, cellHeight * 2, SCREEN_WIDTH - 2, cellHeight * 2, SSD1306_WHITE);
-
-  // Desenhar borda superior
-  display.drawLine(0, SCREEN_HEIGHT / 3, SCREEN_WIDTH - 2, SCREEN_HEIGHT / 3, SSD1306_WHITE);
-  // Desenhar borda inferior
-  display.drawLine(0, SCREEN_HEIGHT - 1, SCREEN_WIDTH - 2, SCREEN_HEIGHT - 1, SSD1306_WHITE);
-
-  // Atualizar o status das saídas no display
-  for (int i = 0; i < 7; i++) {
-    if (outputStatus[i]) {
-      display.fillRect(i * cellWidth + 3, cellHeight + 3, cellWidth - 5, (cellHeight) - 5, SSD1306_WHITE);
+  for (int i = 0; i < 7; i++)
+  {
+    if (outputStatus[i])
+    {
+      display.drawBitmap(i * 18 + 3, 29, TableCell, 15, 14, 1);
+      display.drawBitmap(i * 18 + 6, 34, OnLabel, 9, 4, 0);
     }
   }
-
-  // Adicionar números nas células da linha inferior
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  for (int i = 0; i < 7; i++) {
-    int number = i + 1;
-    String text = String(number);
-    int textWidth = text.length() * 6;
-    int textHeight = 8;
-    int x = (i * cellWidth) + (cellWidth - textWidth) / 2;
-    int y = (cellHeight * 2  + (cellHeight - textHeight) / 2);
-    display.setCursor(x + 1, y);
-    display.print(text);
-  }
-
-  // Exibir o buffer
   display.display();
 }
 
-// Método privado para alterar o nível lógico de uma saída e atualizar o display
-void setOutput(int outputNumber, bool level) {
-  // Definir o nível lógico da saída
-  digitalWrite(digitalPins[outputNumber], level);
+void drawWiFiStatusScreen()
+{
+  display.clearDisplay();
 
-  // Atualizar o status da saída correspondente
-  outputStatus[outputNumber] = level;
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
 
-  // Atualizar a tabela no display
-  drawTable();
+  display.setCursor(26, 3);
+  display.print("WiFi Status:");
+  display.drawLine(2, 13, 125, 13, 1);
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    display.setCursor(0, 25);
+    display.print("SSID: ");
+    display.print(WiFi.SSID());
+
+    display.setCursor(0, 35);
+    display.print("IP: ");
+    display.print(WiFi.localIP());
+
+    display.setCursor(0, 45);
+    display.print("Gateway: ");
+    display.print(WiFi.gatewayIP());
+
+    display.setCursor(0, 55);
+    display.print("MAC:");
+    display.print(WiFi.macAddress());
+  }
+  else
+  {
+    display.setCursor(10, 30);
+    display.print("Nao conectado");
+  }
+
+  display.display();
 }
 
-void setup() {
+void drawESPInfoScreen()
+{
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+
+  display.setCursor(26, 3);
+  display.print("ESP32 Info:");
+  display.drawLine(2, 13, 125, 13, 1);
+
+  // ID do chip
+  display.setCursor(0, 18);
+  display.print("Chip ID: ");
+  display.print((uint32_t)ESP.getEfuseMac(), HEX);
+
+  // Número de núcleos da CPU
+  display.setCursor(0, 28);
+  display.print("Cores: ");
+  display.print(ESP.getChipCores());
+
+  // Frequência da CPU
+  display.setCursor(0, 38);
+  display.print("CPU Freq: ");
+  display.print(ESP.getCpuFreqMHz());
+  display.print(" MHz");
+
+  // Flash Size
+  display.setCursor(0, 48);
+  display.print("Flash: ");
+  display.print(ESP.getFlashChipSize() / (1024 * 1024));
+  display.print(" MB");
+
+  display.display();
+}
+
+
+void handleButtonPress()
+{
+  if (digitalRead(BUTTON_PIN) == LOW)
+  {
+    if (millis() - lastDebounceTime > debounceDelay)
+    {
+      lastDebounceTime = millis();
+      currentScreen = (currentScreen + 1) % 3;
+      if (currentScreen == 0)
+      {
+        drawRelayStatusScreen();
+      }
+      else if (currentScreen == 1)
+      {
+        drawWiFiStatusScreen();
+      }
+      else{
+        drawESPInfoScreen();
+      }
+    }
+  }
+}
+
+// Função para alternar os relés com controle de tempo
+void toggleRelay()
+{
+  if (millis() - lastToggleTime >= toggleInterval)
+  {
+    lastToggleTime = millis();
+
+    // Alternar saída atual
+    outputStatus[relayIndex] = !outputStatus[relayIndex];
+    digitalWrite(digitalPins[relayIndex], outputStatus[relayIndex]);
+
+    if (relayIndex > 0)
+    {
+      outputStatus[relayIndex - 1] = !outputStatus[relayIndex - 1];
+      digitalWrite(digitalPins[relayIndex - 1], outputStatus[relayIndex - 1]);
+    }
+    else if (outputStatus[6] == true){
+      outputStatus[6] = !outputStatus[6];
+      digitalWrite(digitalPins[6], outputStatus[6]);
+    }
+
+    // Atualizar a tela de status dos relés
+    if (currentScreen == 0)
+    {
+      drawRelayStatusScreen();
+    }
+
+    // Próxima saída
+    relayIndex = (relayIndex + 1) % 7;
+  }
+}
+
+void setup()
+{
   Serial.begin(9600);
 
-  // Configurar comunicação I2C
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(I2C_FREQUENCY);
 
-  // Inicializar o display OLED
-  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
-    Serial.println(F("Falha na inicialização do display SSD1306"));
-    for (;;); // Trava o loop em caso de falha
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
+  {
+    Serial.println(F("Falha na inicializacao do display SSD1306"));
+    for (;;)
+      ;
   }
 
-  // Exibir o logo inicial (splash screen)
-  display.display();
-  delay(2000); // Pausa de 2 segundos
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
 
-  // Limpar o buffer do display
+  display.display();
+  delay(2000);
   display.clearDisplay();
 
-  // Configurar pinos GPIO como saídas digitais
-  for (int i = 0; i < 7; i++) {
+  for (int i = 0; i < 7; i++)
+  {
     pinMode(digitalPins[i], OUTPUT);
-    digitalWrite(digitalPins[i], LOW); // Inicialmente desligar as saídas
+    digitalWrite(digitalPins[i], LOW);
   }
 
-  pinMode(35,OUTPUT);
-  digitalWrite(35,HIGH);
-  delay(100);
-  digitalWrite(35,LOW);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
 
-  // Desenhar a tabela inicial
-  drawTable();
+  WiFiManager wifiManager;
+  wifiManager.autoConnect("ESP32-Setup"); // Nome do Access Point para configuração
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    Serial.println("Conectado!");
+    drawRelayStatusScreen();
+  }
 }
 
-void loop() {
-  // Alternar as saídas digitalmente
-  for (int i = 5; i < 7; i++) {
-    setOutput(i, true);  // Ligar a saída atual
-    delay(250);         // Pausar por 1 segundo
-    setOutput(i, false); // Desligar a saída atual
-    delay(250);          // Pausar por 0,5 segundos
-  }
+void loop()
+{
+  handleButtonPress();
+  toggleRelay();
 }
