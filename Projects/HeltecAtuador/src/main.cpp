@@ -4,7 +4,10 @@
 #include <Adafruit_SSD1306.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <WebServer.h>
 #include <images.h>
+#include <FS.h>
+#include <LittleFS.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -18,21 +21,17 @@
 int digitalPins[7] = {1, 2, 3, 4, 5, 6, 7};
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
+WebServer server(80);
 
 bool outputStatus[7] = {false, false, false, false, false, false, false};
-
 int currentScreen = 0;
 
 unsigned long lastDebounceTime = 0;
 unsigned long debounceDelay = 200;
-unsigned long lastToggleTime = 0;
-unsigned long toggleInterval = 500;
-int relayIndex = 0;
 
 void drawRelayStatusScreen()
 {
   display.clearDisplay();
-
   display.setCursor(26, 3);
   display.print("Relay Status:");
   display.drawLine(2, 13, 125, 13, 1);
@@ -54,7 +53,6 @@ void drawRelayStatusScreen()
 void drawWiFiStatusScreen()
 {
   display.clearDisplay();
-
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setTextWrap(false);
@@ -86,7 +84,6 @@ void drawWiFiStatusScreen()
     display.setCursor(10, 30);
     display.print("Nao conectado");
   }
-
   display.display();
 }
 
@@ -101,23 +98,19 @@ void drawESPInfoScreen()
   display.print("ESP32 Info:");
   display.drawLine(2, 13, 125, 13, 1);
 
-  // ID do chip
   display.setCursor(0, 18);
   display.print("Chip ID: ");
   display.print((uint32_t)ESP.getEfuseMac(), HEX);
 
-  // Número de núcleos da CPU
   display.setCursor(0, 28);
   display.print("Cores: ");
   display.print(ESP.getChipCores());
 
-  // Frequência da CPU
   display.setCursor(0, 38);
   display.print("CPU Freq: ");
   display.print(ESP.getCpuFreqMHz());
   display.print(" MHz");
 
-  // Flash Size
   display.setCursor(0, 48);
   display.print("Flash: ");
   display.print(ESP.getFlashChipSize() / (1024 * 1024));
@@ -125,7 +118,6 @@ void drawESPInfoScreen()
 
   display.display();
 }
-
 
 void handleButtonPress()
 {
@@ -143,48 +135,93 @@ void handleButtonPress()
       {
         drawWiFiStatusScreen();
       }
-      else{
+      else
+      {
         drawESPInfoScreen();
       }
     }
   }
 }
 
-// Função para alternar os relés com controle de tempo
-void toggleRelay()
-{
-  if (millis() - lastToggleTime >= toggleInterval)
-  {
-    lastToggleTime = millis();
-
-    // Alternar saída atual
-    outputStatus[relayIndex] = !outputStatus[relayIndex];
-    digitalWrite(digitalPins[relayIndex], outputStatus[relayIndex]);
-
-    if (relayIndex > 0)
-    {
-      outputStatus[relayIndex - 1] = !outputStatus[relayIndex - 1];
-      digitalWrite(digitalPins[relayIndex - 1], outputStatus[relayIndex - 1]);
-    }
-    else if (outputStatus[6] == true){
-      outputStatus[6] = !outputStatus[6];
-      digitalWrite(digitalPins[6], outputStatus[6]);
-    }
-
-    // Atualizar a tela de status dos relés
-    if (currentScreen == 0)
-    {
-      drawRelayStatusScreen();
-    }
-
-    // Próxima saída
-    relayIndex = (relayIndex + 1) % 7;
+void handleGetRelayStatus() {
+  String json = "{";
+  for (int i = 0; i < 7; i++) {
+    json += "\"relay" + String(i) + "\":";
+    json += outputStatus[i] ? "true" : "false";
+    if (i < 6) json += ",";
   }
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+void serveFile(const char *path, const char *contentType)
+{
+  File file = LittleFS.open(path, "r");
+  if (!file)
+  {
+    server.send(404, "text/plain", "Arquivo não encontrado");
+    return;
+  }
+
+  server.streamFile(file, contentType);
+  file.close();
+}
+
+// Função para atualizar os relés a partir do status recebido
+void handleRelayControl()
+{
+  if (server.hasArg("relay") && server.hasArg("state"))
+  {
+    int relayNum = server.arg("relay").toInt();
+    bool state = (server.arg("state") == "on");
+
+    if (relayNum >= 0 && relayNum < 7)
+    {
+      outputStatus[relayNum] = state;
+      digitalWrite(digitalPins[relayNum], outputStatus[relayNum]);
+
+      if (currentScreen == 0)
+      {
+        drawRelayStatusScreen();
+      }
+
+      server.send(200, "text/plain", "OK");
+    }
+    else
+    {
+      server.send(400, "text/plain", "Número de relé inválido.");
+    }
+  }
+  else
+  {
+    server.send(400, "text/plain", "Parâmetros 'relay' e 'state' são obrigatórios.");
+  }
+}
+
+// Configurações do servidor web
+void setupServer()
+{
+  server.on("/", []()
+            { serveFile("/index.html", "text/html"); });
+  server.on("/style.css", []()
+            { serveFile("/style.css", "text/css"); });
+  server.on("/script.js", []()
+            { serveFile("/script.js", "application/javascript"); });
+  server.on("/relay", handleRelayControl);
+  server.on("/status", handleGetRelayStatus);
+  server.begin();
 }
 
 void setup()
 {
   Serial.begin(9600);
+
+  if (!LittleFS.begin())
+  {
+    Serial.println("Falha ao montar o LittleFS");
+    return;
+  }
 
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(I2C_FREQUENCY);
@@ -220,10 +257,12 @@ void setup()
     Serial.println("Conectado!");
     drawRelayStatusScreen();
   }
+
+  setupServer();
 }
 
 void loop()
 {
   handleButtonPress();
-  toggleRelay();
+  server.handleClient();
 }

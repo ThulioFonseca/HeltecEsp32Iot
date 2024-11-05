@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Relay Output</title>
+    <link rel="stylesheet" href="/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div class="container">
+        <h1>Relay Output</h1>
+        <form id="relay-form">
+            <!-- Relés 1 a 7 -->
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 1</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay1" class="checkbox" onclick="toggleRelay(0, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 2</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay2" class="checkbox" onclick="toggleRelay(1, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 3</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay3" class="checkbox" onclick="toggleRelay(2, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 4</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay4" class="checkbox" onclick="toggleRelay(3, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 5</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay5" class="checkbox" onclick="toggleRelay(4, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 6</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay6" class="checkbox" onclick="toggleRelay(5, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>
+            <div class="relay-toggle">
+                <div class="col">
+                    <label>Output 7</label>
+                </div>
+                <div class="col">
+                    <label class="switch-container">
+                        <input type="checkbox" id="relay7" class="checkbox" onclick="toggleRelay(6, this.checked)">
+                        <span class="switch"><span class="slider"></span></span>
+                    </label>
+                </div>
+            </div>            
+        </form>
+    </div>
+    <script src="/script.js"></script>
+</body>
+
+</html>
