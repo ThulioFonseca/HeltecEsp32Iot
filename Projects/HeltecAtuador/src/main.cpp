@@ -8,6 +8,7 @@
 #include <images.h>
 #include <FS.h>
 #include <LittleFS.h>
+#include <ArduinoJson.h>
 
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
@@ -17,17 +18,81 @@
 #define SCREEN_ADDRESS 0x3C
 #define I2C_FREQUENCY 500000
 #define BUTTON_PIN 0 // GPIO do botão PROG
+#define LOG_LINES 8
 
-int digitalPins[7] = {1, 2, 3, 4, 5, 6, 7};
+const int RELAY_COUNT = 7;
+const int digitalPins[RELAY_COUNT] = {1, 2, 3, 4, 5, 6, 7};
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
 WebServer server(80);
+WiFiManager wifiManager;
 
-bool outputStatus[7] = {false, false, false, false, false, false, false};
+bool outputStatus[RELAY_COUNT] = {false};
 int currentScreen = 0;
+unsigned long debounceDelay = 50;
+unsigned long buttonPressStart = 0;
+bool buttonLongPressActive = false;
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+String logBuffer[LOG_LINES];
+int logIndex = 0;
 
-unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 200;
+void addLog(const String &message)
+{
+  logBuffer[logIndex] = message;
+  logIndex = (logIndex + 1) % LOG_LINES;
+}
+
+void logMessage(const String &message)
+{
+  Serial.println(message);
+  addLog(message);
+}
+
+void resetWiFiConfig()
+{
+  logMessage("Configurações Wi-Fi resetadas!");
+  wifiManager.resetSettings();
+  ESP.restart();
+}
+
+void IRAM_ATTR handleButtonInterrupt()
+{
+  unsigned long currentMillis = millis();
+
+  if (digitalRead(BUTTON_PIN) == LOW)
+  { // Botão pressionado
+    buttonPressStart = currentMillis;
+    buttonLongPressActive = false;
+  }
+  else
+  { // Botão liberado
+    unsigned long pressDuration = currentMillis - buttonPressStart;
+
+    if (pressDuration >= 2000)
+    {                               // Pressionamento longo
+      buttonLongPressActive = true; // Marcar que pressionamento longo ocorreu
+    }
+    else if (pressDuration >= debounceDelay && !buttonLongPressActive)
+    { // Pressionamento curto
+      portENTER_CRITICAL(&mux);
+      currentScreen = (currentScreen + 1) % 4;
+      portEXIT_CRITICAL(&mux);
+    }
+  }
+}
+
+void checkLongPressAction()
+{
+  if (!buttonLongPressActive && digitalRead(BUTTON_PIN) == LOW)
+  {
+    unsigned long pressDuration = millis() - buttonPressStart;
+    if (pressDuration >= 2000)
+    {
+      resetWiFiConfig();
+      buttonLongPressActive = true;
+    }
+  }
+}
 
 void drawRelayStatusScreen()
 {
@@ -35,11 +100,10 @@ void drawRelayStatusScreen()
   display.setCursor(26, 3);
   display.print("Relay Status:");
   display.drawLine(2, 13, 125, 13, 1);
-
   display.drawBitmap(1, 27, Table, 127, 36, 1);
   display.drawBitmap(4, 33, OffArrayLabel, 120, 5, 1);
 
-  for (int i = 0; i < 7; i++)
+  for (int i = 0; i < RELAY_COUNT; i++)
   {
     if (outputStatus[i])
     {
@@ -66,15 +130,12 @@ void drawWiFiStatusScreen()
     display.setCursor(0, 25);
     display.print("SSID: ");
     display.print(WiFi.SSID());
-
     display.setCursor(0, 35);
     display.print("IP: ");
     display.print(WiFi.localIP());
-
     display.setCursor(0, 45);
     display.print("Gateway: ");
     display.print(WiFi.gatewayIP());
-
     display.setCursor(0, 55);
     display.print("MAC:");
     display.print(WiFi.macAddress());
@@ -98,20 +159,20 @@ void drawESPInfoScreen()
   display.print("ESP32 Info:");
   display.drawLine(2, 13, 125, 13, 1);
 
-  display.setCursor(0, 18);
+  display.setCursor(0, 25);
   display.print("Chip ID: ");
   display.print((uint32_t)ESP.getEfuseMac(), HEX);
 
-  display.setCursor(0, 28);
+  display.setCursor(0, 35);
   display.print("Cores: ");
   display.print(ESP.getChipCores());
 
-  display.setCursor(0, 38);
+  display.setCursor(0, 45);
   display.print("CPU Freq: ");
   display.print(ESP.getCpuFreqMHz());
   display.print(" MHz");
 
-  display.setCursor(0, 48);
+  display.setCursor(0, 55);
   display.print("Flash: ");
   display.print(ESP.getFlashChipSize() / (1024 * 1024));
   display.print(" MB");
@@ -119,39 +180,40 @@ void drawESPInfoScreen()
   display.display();
 }
 
-void handleButtonPress()
+void drawLogScreen()
 {
-  if (digitalRead(BUTTON_PIN) == LOW)
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+
+  display.setCursor(50, 3);
+  display.print("Logs:");
+  display.drawLine(2, 13, 125, 13, 1);
+
+  int y = 15;
+  int startIndex = (logIndex + LOG_LINES - 6) % LOG_LINES; // Começar pelos últimos 7 logs
+
+  for (int i = 0; i < 6; i++) // Mostrar 7 linhas, que cabem na tela sem sobreposição
   {
-    if (millis() - lastDebounceTime > debounceDelay)
-    {
-      lastDebounceTime = millis();
-      currentScreen = (currentScreen + 1) % 3;
-      if (currentScreen == 0)
-      {
-        drawRelayStatusScreen();
-      }
-      else if (currentScreen == 1)
-      {
-        drawWiFiStatusScreen();
-      }
-      else
-      {
-        drawESPInfoScreen();
-      }
-    }
+    int index = (startIndex + i) % LOG_LINES;
+    display.setCursor(0, y);
+    display.print(logBuffer[index]);
+    y += 8;
   }
+  
+  display.display();
 }
 
-void handleGetRelayStatus() {
-  String json = "{";
-  for (int i = 0; i < 7; i++) {
-    json += "\"relay" + String(i) + "\":";
-    json += outputStatus[i] ? "true" : "false";
-    if (i < 6) json += ",";
+void handleGetRelayStatus()
+{
+  JsonDocument jsonDoc;
+  for (int i = 0; i < RELAY_COUNT; i++)
+  {
+    jsonDoc["relay" + String(i)] = outputStatus[i];
   }
-  json += "}";
-
+  String json;
+  serializeJson(jsonDoc, json);
   server.send(200, "application/json", json);
 }
 
@@ -163,34 +225,32 @@ void serveFile(const char *path, const char *contentType)
     server.send(404, "text/plain", "Arquivo não encontrado");
     return;
   }
-
   server.streamFile(file, contentType);
   file.close();
 }
 
-// Função para atualizar os relés a partir do status recebido
 void handleRelayControl()
 {
   if (server.hasArg("relay") && server.hasArg("state"))
   {
     int relayNum = server.arg("relay").toInt();
-    bool state = (server.arg("state") == "on");
+    String state = server.arg("state");
 
-    if (relayNum >= 0 && relayNum < 7)
+    if (relayNum >= 0 && relayNum < RELAY_COUNT && (state == "on" || state == "off"))
     {
-      outputStatus[relayNum] = state;
+      outputStatus[relayNum] = (state == "on");
       digitalWrite(digitalPins[relayNum], outputStatus[relayNum]);
+      logMessage("Relay " + String(relayNum + 1) + ": " + state);
 
       if (currentScreen == 0)
       {
         drawRelayStatusScreen();
       }
-
       server.send(200, "text/plain", "OK");
     }
     else
     {
-      server.send(400, "text/plain", "Número de relé inválido.");
+      server.send(400, "text/plain", "Número de relé inválido ou estado inválido.");
     }
   }
   else
@@ -199,7 +259,6 @@ void handleRelayControl()
   }
 }
 
-// Configurações do servidor web
 void setupServer()
 {
   server.on("/", []()
@@ -213,14 +272,47 @@ void setupServer()
   server.begin();
 }
 
+void taskDisplayAndButton(void *pvParameters)
+{
+  for (;;)
+  {
+    switch (currentScreen)
+    {
+    case 0:
+      drawRelayStatusScreen();
+      break;
+    case 1:
+      drawWiFiStatusScreen();
+      break;
+    case 2:
+      drawESPInfoScreen();
+      break;
+    case 3:
+      drawLogScreen();
+      break;
+    }
+    checkLongPressAction(); // Checa se o pressionamento longo foi atingido
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+  }
+}
+
+void taskServer(void *pvParameters)
+{
+  for (;;)
+  {
+    server.handleClient();
+    vTaskDelay(10 / portTICK_PERIOD_MS);
+  }
+}
+
 void setup()
 {
   Serial.begin(9600);
 
   if (!LittleFS.begin())
   {
-    Serial.println("Falha ao montar o LittleFS");
-    return;
+    logMessage("Falha ao montar o LittleFS");
+    ESP.restart();
   }
 
   Wire.begin(OLED_SDA, OLED_SCL);
@@ -228,9 +320,8 @@ void setup()
 
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS))
   {
-    Serial.println(F("Falha na inicializacao do display SSD1306"));
-    for (;;)
-      ;
+    logMessage("Falha na inicialização do display SSD1306");
+    ESP.restart();
   }
 
   display.setTextSize(1);
@@ -241,28 +332,29 @@ void setup()
   delay(2000);
   display.clearDisplay();
 
-  for (int i = 0; i < 7; i++)
+  for (int i = 0; i < RELAY_COUNT; i++)
   {
     pinMode(digitalPins[i], OUTPUT);
     digitalWrite(digitalPins[i], LOW);
   }
 
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonInterrupt, CHANGE);
 
-  WiFiManager wifiManager;
-  wifiManager.autoConnect("ESP32-Setup"); // Nome do Access Point para configuração
+  wifiManager.autoConnect("ESP32-Setup");
 
   if (WiFi.status() == WL_CONNECTED)
   {
-    Serial.println("Conectado!");
-    drawRelayStatusScreen();
+    logMessage("Conectado!");
   }
 
   setupServer();
+
+  xTaskCreatePinnedToCore(taskDisplayAndButton, "DisplayAndButton", 4096, NULL, 1, NULL, 1); // Núcleo 1
+  xTaskCreatePinnedToCore(taskServer, "Server", 4096, NULL, 1, NULL, 0);                     // Núcleo 0
 }
 
 void loop()
 {
-  handleButtonPress();
-  server.handleClient();
+  // Loop vazio, pois as tarefas estão distribuídas nos núcleos
 }
