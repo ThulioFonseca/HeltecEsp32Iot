@@ -55,6 +55,55 @@ void resetWiFiConfig()
   ESP.restart();
 }
 
+void batchRelayToggle()
+{
+  int activeRelays = 0;
+  bool toggleSignal = false;
+
+  for (int index = 0; index < RELAY_COUNT; index++)
+  {
+    if (outputStatus[index] == true)
+    {
+      activeRelays++;
+    }
+  }
+
+  if (activeRelays < 3)
+  {
+    toggleSignal = true;
+  }
+
+  for (int index = 0; index < RELAY_COUNT; index++)
+  {
+    outputStatus[index] = toggleSignal;
+    digitalWrite(digitalPins[index], outputStatus[index]);
+  }
+
+  logMessage("Relays Toggled to: " + String(toggleSignal));
+}
+
+void handleShortPressAction()
+{
+  portENTER_CRITICAL(&mux);
+  currentScreen = (currentScreen + 1) % 4;
+  portEXIT_CRITICAL(&mux);
+}
+
+void handleLongPressAction()
+{
+  switch (currentScreen)
+  {
+  case 0:
+    batchRelayToggle();
+    break;
+  case 1:
+    resetWiFiConfig();
+    break;
+  }
+  
+  buttonLongPressActive = true;
+}
+
 void IRAM_ATTR handleButtonInterrupt()
 {
   unsigned long currentMillis = millis();
@@ -69,15 +118,10 @@ void IRAM_ATTR handleButtonInterrupt()
     unsigned long pressDuration = currentMillis - buttonPressStart;
 
     if (pressDuration >= 2000)
-    {                               // Pressionamento longo
       buttonLongPressActive = true; // Marcar que pressionamento longo ocorreu
-    }
+
     else if (pressDuration >= debounceDelay && !buttonLongPressActive)
-    { // Pressionamento curto
-      portENTER_CRITICAL(&mux);
-      currentScreen = (currentScreen + 1) % 4;
-      portEXIT_CRITICAL(&mux);
-    }
+      handleShortPressAction();
   }
 }
 
@@ -87,10 +131,7 @@ void checkLongPressAction()
   {
     unsigned long pressDuration = millis() - buttonPressStart;
     if (pressDuration >= 2000)
-    {
-      resetWiFiConfig();
-      buttonLongPressActive = true;
-    }
+      handleLongPressAction();
   }
 }
 
@@ -117,10 +158,6 @@ void drawRelayStatusScreen()
 void drawWiFiStatusScreen()
 {
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextWrap(false);
-
   display.setCursor(26, 3);
   display.print("WiFi Status:");
   display.drawLine(2, 13, 125, 13, 1);
@@ -151,10 +188,6 @@ void drawWiFiStatusScreen()
 void drawESPInfoScreen()
 {
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextWrap(false);
-
   display.setCursor(26, 3);
   display.print("ESP32 Info:");
   display.drawLine(2, 13, 125, 13, 1);
@@ -183,10 +216,6 @@ void drawESPInfoScreen()
 void drawLogScreen()
 {
   display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextWrap(false);
-
   display.setCursor(50, 3);
   display.print("Logs:");
   display.drawLine(2, 13, 125, 13, 1);
@@ -201,7 +230,7 @@ void drawLogScreen()
     display.print(logBuffer[index]);
     y += 8;
   }
-  
+
   display.display();
 }
 
@@ -242,10 +271,6 @@ void handleRelayControl()
       digitalWrite(digitalPins[relayNum], outputStatus[relayNum]);
       logMessage("Relay " + String(relayNum + 1) + ": " + state);
 
-      if (currentScreen == 0)
-      {
-        drawRelayStatusScreen();
-      }
       server.send(200, "text/plain", "OK");
     }
     else
@@ -274,6 +299,10 @@ void setupServer()
 
 void taskDisplayAndButton(void *pvParameters)
 {
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextWrap(false);
+
   for (;;)
   {
     switch (currentScreen)
@@ -292,7 +321,7 @@ void taskDisplayAndButton(void *pvParameters)
       break;
     }
     checkLongPressAction(); // Checa se o pressionamento longo foi atingido
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(200 / portTICK_PERIOD_MS);
   }
 }
 
@@ -324,13 +353,8 @@ void setup()
     ESP.restart();
   }
 
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextWrap(false);
-
   display.display();
   delay(2000);
-  display.clearDisplay();
 
   for (int i = 0; i < RELAY_COUNT; i++)
   {
