@@ -17,29 +17,33 @@
 #define OLED_RST 21
 #define SCREEN_ADDRESS 0x3C
 #define I2C_FREQUENCY 500000
-#define BUTTON_PIN 0 // GPIO do botão PROG
-#define LOG_LINES 8
+#define BUTTON_PIN 0
+#define LOG_MAX_LINES 8
+
+// Configuração de tempos
+const unsigned long LONG_PRESS_DURATION = 2000;
+const unsigned long DEBOUNCE_DELAY = 50;
+const unsigned long SCREEN_UPDATE_DELAY = 200;
 
 const int RELAY_COUNT = 7;
-const int digitalPins[RELAY_COUNT] = {1, 2, 3, 4, 5, 6, 7};
+const int relayPins[RELAY_COUNT] = {1, 2, 3, 4, 5, 6, 7};
 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RST);
 WebServer server(80);
 WiFiManager wifiManager;
 
-bool outputStatus[RELAY_COUNT] = {false};
+bool relayStatus[RELAY_COUNT] = {false};
 int currentScreen = 0;
-unsigned long debounceDelay = 50;
-unsigned long buttonPressStart = 0;
-bool buttonLongPressActive = false;
+unsigned long buttonPressStartTime = 0;
+bool isLongPressActive = false;
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
-String logBuffer[LOG_LINES];
+String logBuffer[LOG_MAX_LINES];
 int logIndex = 0;
 
 void addLog(const String &message)
 {
   logBuffer[logIndex] = message;
-  logIndex = (logIndex + 1) % LOG_LINES;
+  logIndex = (logIndex + 1) % LOG_MAX_LINES;
 }
 
 void logMessage(const String &message)
@@ -57,32 +61,25 @@ void resetWiFiConfig()
 
 void batchRelayToggle()
 {
+  bool toggleState = true;
   int activeRelays = 0;
-  bool toggleSignal = false;
 
-  for (int index = 0; index < RELAY_COUNT; index++)
-  {
-    if (outputStatus[index] == true)
-    {
+  for (int i = 0; i < RELAY_COUNT; i++)
+    if (relayStatus[i])
       activeRelays++;
-    }
-  }
 
-  if (activeRelays < 3)
+  toggleState = activeRelays < 3;
+
+  for (int i = 0; i < RELAY_COUNT; i++)
   {
-    toggleSignal = true;
+    relayStatus[i] = toggleState;
+    digitalWrite(relayPins[i], relayStatus[i]);
   }
 
-  for (int index = 0; index < RELAY_COUNT; index++)
-  {
-    outputStatus[index] = toggleSignal;
-    digitalWrite(digitalPins[index], outputStatus[index]);
-  }
-
-  logMessage("Relays Toggled to: " + String(toggleSignal));
+  logMessage("Relays toggled to: " + String(toggleState));
 }
 
-void handleShortPressAction()
+void handleShortPress()
 {
   portENTER_CRITICAL(&mux);
   currentScreen = (currentScreen + 1) % 4;
@@ -100,36 +97,35 @@ void handleLongPressAction()
     resetWiFiConfig();
     break;
   }
-  
-  buttonLongPressActive = true;
+
+  isLongPressActive = true;
 }
 
-void IRAM_ATTR handleButtonInterrupt()
+void IRAM_ATTR handleButtonPress()
 {
   unsigned long currentMillis = millis();
 
   if (digitalRead(BUTTON_PIN) == LOW)
-  { // Botão pressionado
-    buttonPressStart = currentMillis;
-    buttonLongPressActive = false;
+  {
+    buttonPressStartTime = currentMillis;
+    isLongPressActive = false;
   }
   else
-  { // Botão liberado
-    unsigned long pressDuration = currentMillis - buttonPressStart;
+  {
+    unsigned long pressDuration = currentMillis - buttonPressStartTime;
 
-    if (pressDuration >= 2000)
-      buttonLongPressActive = true; // Marcar que pressionamento longo ocorreu
-
-    else if (pressDuration >= debounceDelay && !buttonLongPressActive)
-      handleShortPressAction();
+    if (pressDuration >= LONG_PRESS_DURATION)
+      isLongPressActive = true;
+    else if (pressDuration >= DEBOUNCE_DELAY && !isLongPressActive)
+      handleShortPress();
   }
 }
 
 void checkLongPressAction()
 {
-  if (!buttonLongPressActive && digitalRead(BUTTON_PIN) == LOW)
+  if (!isLongPressActive && digitalRead(BUTTON_PIN) == LOW)
   {
-    unsigned long pressDuration = millis() - buttonPressStart;
+    unsigned long pressDuration = millis() - buttonPressStartTime;
     if (pressDuration >= 2000)
       handleLongPressAction();
   }
@@ -146,7 +142,7 @@ void drawRelayStatusScreen()
 
   for (int i = 0; i < RELAY_COUNT; i++)
   {
-    if (outputStatus[i])
+    if (relayStatus[i])
     {
       display.drawBitmap(i * 18 + 3, 29, TableCell, 15, 14, 1);
       display.drawBitmap(i * 18 + 6, 34, OnLabel, 9, 4, 0);
@@ -221,11 +217,11 @@ void drawLogScreen()
   display.drawLine(2, 13, 125, 13, 1);
 
   int y = 15;
-  int startIndex = (logIndex + LOG_LINES - 6) % LOG_LINES; // Começar pelos últimos 7 logs
+  int startIndex = (logIndex + LOG_MAX_LINES - 6) % LOG_MAX_LINES; // Começar pelos últimos 7 logs
 
   for (int i = 0; i < 6; i++) // Mostrar 7 linhas, que cabem na tela sem sobreposição
   {
-    int index = (startIndex + i) % LOG_LINES;
+    int index = (startIndex + i) % LOG_MAX_LINES;
     display.setCursor(0, y);
     display.print(logBuffer[index]);
     y += 8;
@@ -239,7 +235,7 @@ void handleGetRelayStatus()
   JsonDocument jsonDoc;
   for (int i = 0; i < RELAY_COUNT; i++)
   {
-    jsonDoc["relay" + String(i)] = outputStatus[i];
+    jsonDoc["relay" + String(i)] = relayStatus[i];
   }
   String json;
   serializeJson(jsonDoc, json);
@@ -267,8 +263,8 @@ void handleRelayControl()
 
     if (relayNum >= 0 && relayNum < RELAY_COUNT && (state == "on" || state == "off"))
     {
-      outputStatus[relayNum] = (state == "on");
-      digitalWrite(digitalPins[relayNum], outputStatus[relayNum]);
+      relayStatus[relayNum] = (state == "on");
+      digitalWrite(relayPins[relayNum], relayStatus[relayNum]);
       logMessage("Relay " + String(relayNum + 1) + ": " + state);
 
       server.send(200, "text/plain", "OK");
@@ -334,16 +330,8 @@ void taskServer(void *pvParameters)
   }
 }
 
-void setup()
+void setupDisplay()
 {
-  Serial.begin(9600);
-
-  if (!LittleFS.begin())
-  {
-    logMessage("Falha ao montar o LittleFS");
-    ESP.restart();
-  }
-
   Wire.begin(OLED_SDA, OLED_SCL);
   Wire.setClock(I2C_FREQUENCY);
 
@@ -355,23 +343,46 @@ void setup()
 
   display.display();
   delay(2000);
+}
+
+void setupIO()
+{
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonPress, CHANGE);
 
   for (int i = 0; i < RELAY_COUNT; i++)
   {
-    pinMode(digitalPins[i], OUTPUT);
-    digitalWrite(digitalPins[i], LOW);
+    pinMode(relayPins[i], OUTPUT);
+    digitalWrite(relayPins[i], LOW);
   }
+}
 
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), handleButtonInterrupt, CHANGE);
+void setupFileSystem()
+{
+  if (!LittleFS.begin())
+  {
+    logMessage("Falha ao montar o LittleFS");
+    ESP.restart();
+  }
+}
 
+void setupWifi()
+{
   wifiManager.autoConnect("ESP32-Setup");
 
   if (WiFi.status() == WL_CONNECTED)
   {
     logMessage("Conectado!");
   }
+}
 
+void setup()
+{
+  Serial.begin(9600);
+  setupFileSystem();
+  setupDisplay();
+  setupWifi();
+  setupIO();
   setupServer();
 
   xTaskCreatePinnedToCore(taskDisplayAndButton, "DisplayAndButton", 4096, NULL, 1, NULL, 1); // Núcleo 1
